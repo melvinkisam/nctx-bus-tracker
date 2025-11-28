@@ -1,5 +1,6 @@
 # Backend stuff 
 backend/data/stores.db
+backend/nctx_1763993672
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
