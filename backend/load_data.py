@@ -21,7 +21,7 @@ def load_stops_data(file_path: str):
 
     db.commit()
     db.close()
-    print("Loaded stops data into the database.")
+    print("Loaded stops data into the database")
 
 if __name__ == "__main__":
     models.Base.metadata.create_all(bind=database.engine)
