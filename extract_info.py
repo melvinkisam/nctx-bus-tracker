@@ -1,8 +1,25 @@
 from bs4 import BeautifulSoup
 from scraper import get_element_by_id    
 
+
 html = get_element_by_id("https://www.nctx.co.uk/stops/3390BU05").prettify()
 soup = BeautifulSoup(html, "html.parser")
+
+
+def get_element_ids(html):
+    soup = BeautifulSoup(html, "html.parser")
+    return [tag.get("id") for tag in soup.find_all(id=True)]
+
+
+def get_element_classes(html):
+    soup = BeautifulSoup(html, "html.parser")
+    class_set = set()
+
+    for tag in soup.find_all(class_=True):
+        class_set.update(tag.get("class"))
+
+    return list(class_set)
+
 
 results = []
 
@@ -30,6 +47,7 @@ for item in soup.select("li.departure-board__item"):
         "journey": a.get("data-journey")
     })
 
+
 # Print results
 for r in results:
     print(r["service"])
@@ -37,3 +55,6 @@ for r in results:
     print(r["departure_time"])
     print(r["status"])
     print("=" * 20)
+
+print("element_ids:", get_element_ids(html))
+print("element_classes:", get_element_classes(html))
