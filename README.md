@@ -1,3 +1,3 @@
 # nctx-bus-tracker
 
-Tracks live bus times for the Nottingham area
+Web app to track live bus times for the Nottingham area.
