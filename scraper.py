@@ -15,11 +15,37 @@ DEFAULT_URL = "https://www.nctx.co.uk/stops/3390BU05"
 DIV_ID = "departure-board-wrapper"
 
 
-# Fetch raw HTML and return as text
+def _get_html_in_browser(url: str, timeout: int) -> str:
+	try:
+		from playwright.sync_api import sync_playwright
+	except ImportError as exc:
+		raise RuntimeError(
+			"NCTX requires a browser challenge. Install it with "
+			"'pip install -r requirements.txt && playwright install chromium'."
+		) from exc
+
+	with sync_playwright() as playwright:
+		browser = playwright.chromium.launch(headless=True)
+		try:
+			page = browser.new_page()
+			page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+			if page.locator("#challenge-form").count() or "Just a moment" in page.title():
+				raise RuntimeError(
+					"NCTX is blocking automated browsers with a Cloudflare challenge. "
+					"Use an official NCTX data feed/API or fetch the page in a normal browser."
+				)
+			return page.content()
+		finally:
+			browser.close()
+
+
+# Fetch raw HTML and return as text. NCTX uses a Cloudflare browser challenge.
 def get_html(url: str, timeout: int = 10) -> str:
 	r = requests.get(url, timeout=timeout)
-	r.raise_for_status() # Raise exception for HTTP errors
-	
+	if r.status_code == 403 and r.headers.get("cf-mitigated") == "challenge":
+		return _get_html_in_browser(url, timeout)
+	r.raise_for_status()
+
 	return r.text
 
 
@@ -55,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			soup = get_soup(args.url)
 			pretty = soup.prettify()
-	except requests.RequestException as exc:
+	except (requests.RequestException, RuntimeError) as exc:
 		print(f"Failed to fetch {args.url}: {exc}", file=sys.stderr)
 		return 2
 
