@@ -1,6 +1,7 @@
 # Backend stuff 
 backend/data/stops.db
 backend/nctx_1763993672/
+backend/tests/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
