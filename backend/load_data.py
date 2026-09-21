@@ -4,14 +4,20 @@ from pathlib import Path
 from database import database
 from models import models
 
+# Path(__file__) = this file's full path.
+# .resolve() = turn it into an absolute path.
+# .parent = take the folder containing this file.
+# This gives us the backend folder, no matter where the script is run from.
 BASE_DIR = Path(__file__).resolve().parent
 GTFS_DIR = BASE_DIR / "nctx_1763993672"
 STOP_FILE = GTFS_DIR / "stops.txt"
 
 
 def clear_table(model_class):
+    # Open a database session.
     db = database.session_local()
     try:
+        # Delete all rows from this table before reloading it.
         db.query(model_class).delete()
         db.commit()
     finally:
@@ -19,8 +25,10 @@ def clear_table(model_class):
 
 
 def load_stops_data(file_path: str | Path):
+    # Open DB session for stop data.
     db = database.session_local()
     try:
+        # Start fresh so the table is not duplicated.
         clear_table(models.Stop)
         with open(file_path, "r", encoding="utf-8") as textfile:
             reader = csv.DictReader(textfile, delimiter=",")
@@ -40,6 +48,7 @@ def load_stops_data(file_path: str | Path):
 
 
 def load_gtfs_tables():
+    # Open one session and load the GTFS tables.
     db = database.session_local()
     try:
         gtfs_files = {
@@ -51,6 +60,7 @@ def load_gtfs_tables():
         }
 
         for file_name, (csv_path, model) in gtfs_files.items():
+            # Clear each table before loading it.
             clear_table(model)
             with open(csv_path, "r", encoding="utf-8") as textfile:
                 reader = csv.DictReader(textfile, delimiter=",")
@@ -127,8 +137,11 @@ def load_gtfs_tables():
 
 
 def load_all_data():
+    # Create tables if they do not exist yet.
     models.Base.metadata.create_all(bind=database.engine)
+    # Load the stop data first.
     load_stops_data(STOP_FILE)
+    # Then load the GTFS timetable/route tables.
     load_gtfs_tables()
     print("Database populated with stops and GTFS schedule tables.")
 
