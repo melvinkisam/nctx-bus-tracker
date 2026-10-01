@@ -7,15 +7,23 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
+# Import the database session and the Stop model so we can query bus stops.
 from database.database import session_local
 from models.models import Stop
 
+# geopy is optional: if it is not installed, we still want the code to load
+# and fail only when the geocode endpoint is actually used.
 try:
     from geopy.geocoders import Nominatim
 except ImportError:  # pragma: no cover - only used when optional dependency is absent
     Nominatim = None
 
 
+# ------------------------------------------------------------
+# 1. Basic maths helper
+# ------------------------------------------------------------
+# This function calculates the distance between two points on Earth.
+# We use it to find the closest bus stops to a user's chosen location.
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Return the great-circle distance in kilometres between two latitude/longitude points."""
     radius_km = 6371.0
@@ -24,6 +32,8 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     lat2_rad = math.radians(lat2)
     lon2_rad = math.radians(lon2)
 
+    # The Haversine formula is a common way to calculate a distance
+    # between two lat/lon coordinates on a sphere.
     dlat = lat2_rad - lat1_rad
     dlon = lon2_rad - lon1_rad
     a = (
@@ -34,6 +44,10 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return radius_km * c
 
 
+# ------------------------------------------------------------
+# 2. Finding nearby stops
+# ------------------------------------------------------------
+# This function checks every stop in the database and returns the closest ones.
 def find_nearest_stops(
     latitude: float,
     longitude: float,
@@ -45,7 +59,9 @@ def find_nearest_stops(
     try:
         rows = db.query(Stop).all()
         stops = []
+
         for stop in rows:
+            # For each stop, calculate how far the user is away.
             distance_km = haversine_km(latitude, longitude, stop.latitude, stop.longitude)
             stops.append(
                 {
@@ -57,12 +73,18 @@ def find_nearest_stops(
                 }
             )
 
+        # Sort by nearest first, then keep only the requested number.
         return sorted(stops, key=lambda item: item["distance_km"])[:limit]
     finally:
         if session is None:
             db.close()
 
 
+# ------------------------------------------------------------
+# 3. Geocoding helper
+# ------------------------------------------------------------
+# Geocoding means turning a text address like "Nottingham city centre"
+# into a latitude/longitude pair so we can compare it with bus stops.
 def geocode_address(address: str, user_agent: str = "nctx-bus-tracker") -> Dict[str, Any]:
     """Convert a human-readable address or place name into latitude/longitude using Nominatim."""
     if Nominatim is None:
@@ -84,16 +106,26 @@ def geocode_address(address: str, user_agent: str = "nctx-bus-tracker") -> Dict[
     }
 
 
+# ------------------------------------------------------------
+# 4. Time helpers
+# ------------------------------------------------------------
+# We need the local UK time because bus timetables are based on local time.
 def uk_local_now() -> datetime:
     return datetime.now(ZoneInfo("Europe/London"))
 
 
+# GTFS times are stored in a string format like "07:45:00".
+# This helper converts that into seconds since midnight so it is easier to compare.
 def parse_gtfs_time(value: str) -> int:
     """Convert a GTFS time string like 07:45:00 into seconds since midnight."""
     hour_str, minute_str, second_str = value.split(":")
     return int(hour_str) * 3600 + int(minute_str) * 60 + int(second_str)
 
 
+# ------------------------------------------------------------
+# 5. Database checks
+# ------------------------------------------------------------
+# This checks whether a GTFS table exists in the SQLite database.
 def database_has_table(table_name: str) -> bool:
     db = session_local()
     try:
@@ -106,6 +138,10 @@ def database_has_table(table_name: str) -> bool:
         db.close()
 
 
+# ------------------------------------------------------------
+# 6. Finding the next buses from a stop
+# ------------------------------------------------------------
+# Once we know the nearest stop, we look at the timetable for that stop.
 def get_next_buses_for_stop(
     stop_id: str,
     now: Optional[datetime] = None,
@@ -133,8 +169,10 @@ def get_next_buses_for_stop(
         try:
             departure_seconds = parse_gtfs_time(departure_time)
         except ValueError:
+            # Some GTFS rows may be blank or malformed; skip them.
             continue
 
+        # Only keep departures after the current time and within the requested window.
         if departure_seconds < current_seconds:
             continue
         if departure_seconds > end_seconds:
@@ -151,6 +189,10 @@ def get_next_buses_for_stop(
     return sorted(upcoming, key=lambda item: item["departure_time"])[:10]
 
 
+# ------------------------------------------------------------
+# 7. All-in-one nearby-bus lookup
+# ------------------------------------------------------------
+# This combines the stop-finding logic and timetable logic.
 def next_bus_times_for_location(
     latitude: float,
     longitude: float,
@@ -159,6 +201,7 @@ def next_bus_times_for_location(
     within_minutes: int = 60,
 ) -> Dict[str, Any]:
     """Return the four nearest stops and their upcoming departures within the next hour."""
+    # Get the closest stops first.
     nearest_stops = find_nearest_stops(latitude, longitude, limit=limit)
     result = {
         "location": {"latitude": latitude, "longitude": longitude},
@@ -168,6 +211,7 @@ def next_bus_times_for_location(
         "status": "ok",
     }
 
+    # If GTFS stop_times data is missing, say so clearly instead of crashing.
     if not database_has_table("stop_times"):
         result["status"] = "unavailable"
         result["message"] = (
@@ -176,6 +220,7 @@ def next_bus_times_for_location(
         )
         return result
 
+    # For each nearest stop, fetch the upcoming buses.
     for stop in nearest_stops:
         stop_id = stop["stop_id"]
         buses = get_next_buses_for_stop(stop_id, now=now, within_minutes=within_minutes)
@@ -191,6 +236,12 @@ def next_bus_times_for_location(
     return result
 
 
+# ------------------------------------------------------------
+# 8. Journey planning
+# ------------------------------------------------------------
+# This is a best-effort planner. It does not yet do full route logic.
+# Instead, it finds the nearest stop to the origin and destination, then checks
+# whether timetable data exists.
 def build_journey_plan(
     origin_latitude: Optional[float] = None,
     origin_longitude: Optional[float] = None,
@@ -201,6 +252,7 @@ def build_journey_plan(
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Best-effort journey planning wrapper. The database currently does not contain enough route data for a full trip planner."""
+    # If the user supplied an address instead of coordinates, geocode it first.
     if origin_address and (origin_latitude is None or origin_longitude is None):
         geocoded_origin = geocode_address(origin_address)
         origin_latitude = geocoded_origin["latitude"]
@@ -211,12 +263,16 @@ def build_journey_plan(
         destination_latitude = geocoded_destination["latitude"]
         destination_longitude = geocoded_destination["longitude"]
 
+    # If we still do not have both origin and destination points, stop early.
     if origin_latitude is None or origin_longitude is None or destination_latitude is None or destination_longitude is None:
         raise ValueError("Origin and destination coordinates or addresses are required.")
 
+    # Find the nearest stop to where the user starts and where they want to end.
     origin_stop = find_nearest_stops(origin_latitude, origin_longitude, limit=1)[0]
     destination_stop = find_nearest_stops(destination_latitude, destination_longitude, limit=1)[0]
 
+    # A true route planner needs more than coordinates.
+    # It needs trip-to-stop sequencing and route matching from GTFS data.
     if not database_has_table("stop_times") or not database_has_table("trips"):
         return {
             "status": "unavailable",
